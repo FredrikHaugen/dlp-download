@@ -43,3 +43,9 @@ History currently contains one imperative subject: “Implement core download fu
 ## Security & Configuration
 
 Preserve `dependencies.lock.json` verification and argument-array process execution. Never commit credentials, private signing keys, or cookie exports. Follow `docs/RELEASING.md` for public packaging and signed engine updates.
+
+## Agent Context
+
+Start with the [agent context index](.codex/README.md) and [project context](.codex/PROJECT.md), then read the task-specific guides linked there. Use [status](.codex/STATUS.md) for dated readiness and remaining work. Keep these guides current when commands, architecture, or accepted behavior change.
+
+Repository skills: [Harbor validation](.agents/skills/harbor-validate/SKILL.md) and [engine maintenance](.agents/skills/harbor-engine-maintenance/SKILL.md). They reuse existing scripts and canonical release/validation documentation.
