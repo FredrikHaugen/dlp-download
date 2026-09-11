@@ -22,6 +22,8 @@ targets:
       - path: Sources/Harbor
       - path: Resources
         buildPhase: resources
+        excludes:
+          - '*.entitlements'
     dependencies:
       - package: HarborCore
     info:
@@ -45,6 +47,19 @@ targets:
       - name: Embed download engines
         script: /usr/bin/python3 "$SRCROOT/Scripts/embed_engines.py" "$SRCROOT/Vendor/EngineSet" "$TARGET_BUILD_DIR/$WRAPPER_NAME"
         basedOnDependencyAnalysis: false
+  HarborUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - Tests/HarborUITests
+    dependencies:
+      - target: Harbor
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.harborapp.Harbor.UITests
+        TEST_TARGET_NAME: Harbor
+        ENABLE_HARDENED_RUNTIME: NO
 schemes:
   Harbor:
     build:
@@ -54,3 +69,7 @@ schemes:
       config: Debug
     archive:
       config: Release
+    test:
+      config: Debug
+      targets:
+        - HarborUITests

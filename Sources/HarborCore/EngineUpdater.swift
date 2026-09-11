@@ -58,9 +58,11 @@ public actor EngineUpdater {
 
     public func current() async -> EngineSet {
         guard channel.isConfigured, let state = activation() else { return bundled }
+        if state.active == "__bundled__" { return bundled }
         for version in [state.active, state.previous].compactMap({ $0 }) {
             let set = installed(version)
-            if (try? await verifyInstallation(set)) != nil { return set }
+            do { try await verifyInstallation(set); try await smokeTest(set); return set }
+            catch { continue }
         }
         return bundled
     }
@@ -122,7 +124,11 @@ public actor EngineUpdater {
     }
     public func rollback() async throws -> EngineSet {
         guard var state = activation() else { return bundled }
-        guard let previous = state.previous else { return bundled }
+        guard let previous = state.previous, previous != "__bundled__" else {
+            state.previous = state.active; state.active = "__bundled__"
+            try JSONEncoder().encode(state).write(to: activationURL, options: .atomic)
+            return bundled
+        }
         let set = installed(previous)
         try await verifyInstallation(set)
         state.previous = state.active; state.active = previous

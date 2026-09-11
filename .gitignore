@@ -9,4 +9,4 @@ artifacts/
 *.dmg
 *.zip
 *.private-key
-
+__pycache__/

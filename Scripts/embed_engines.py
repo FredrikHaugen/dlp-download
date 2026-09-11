@@ -8,6 +8,13 @@ import sys
 source, app = map(Path, sys.argv[1:])
 if not (source / 'Resources' / 'engine-set.json').exists():
     raise SystemExit('Missing engines. Run python3 Scripts/bootstrap_engines.py first.')
+previous = app / 'Contents/Resources/engine-set.json'
+if previous.exists():
+    for relative in json.loads(previous.read_text()).get('files', {}):
+        path = Path(relative)
+        if path.is_absolute() or '..' in path.parts: raise SystemExit('Invalid previous engine manifest')
+        target = app / 'Contents' / path
+        if target.is_file(): target.unlink()
 for folder in ['MacOS', 'Frameworks', 'Resources']:
     if (source / folder).exists():
         shutil.copytree(source / folder, app / 'Contents' / folder, dirs_exist_ok=True)

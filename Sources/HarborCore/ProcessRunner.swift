@@ -25,17 +25,25 @@ private final class ProcessLifetime: @unchecked Sendable {
         guard let process, process.isRunning else { lock.unlock(); return }
         let pid = process.processIdentifier
         lock.unlock()
-        let descendants = Self.children(of: pid)
-        for child in descendants.reversed() { kill(child, SIGTERM) }
+        let descendants = Self.children(of: pid).compactMap { child -> (pid_t, UInt64)? in
+            Self.identity(child).map { (child, $0) }
+        }
+        for (child, _) in descendants.reversed() { kill(child, SIGTERM) }
         kill(pid, SIGTERM)
         DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
             // Do not kill a recycled parent PID after Foundation reaps it.
             if process.isRunning { kill(pid, SIGKILL) }
-            for child in descendants where getpgid(child) != -1 {
-                // Only kill processes still belonging to this process tree.
-                if Self.children(of: pid).contains(child) { kill(child, SIGKILL) }
+            for (child, start) in descendants {
+                // Start time protects against PID reuse even after an orphan is reparented.
+                if Self.identity(child) == start { kill(child, SIGKILL) }
             }
         }
+    }
+    private static func identity(_ pid: pid_t) -> UInt64? {
+        var info = proc_bsdinfo()
+        let size = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, Int32(MemoryLayout<proc_bsdinfo>.size))
+        guard size == MemoryLayout<proc_bsdinfo>.size else { return nil }
+        return info.pbi_start_tvsec &* 1_000_000 &+ info.pbi_start_tvusec
     }
     private static func children(of pid: pid_t) -> [pid_t] {
         var buffer = [pid_t](repeating: 0, count: 4096)

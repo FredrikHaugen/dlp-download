@@ -48,6 +48,7 @@ public actor DownloadCoordinator {
     }
     public func enqueue(_ values: [DownloadJob], consent: BrowserConsent? = nil) async throws {
         guard !stopping else { return }
+        if let storageFailure { throw DownloadFailure(.destination, storageFailure + " Restart Harbor after freeing disk space.") }
         for job in values {
             guard job.kind != .torrent else { throw DownloadFailure(.unsupported, "Torrent downloads are not available yet.") }
             try await repository.save(job)
@@ -57,6 +58,7 @@ public actor DownloadCoordinator {
         publish(); schedule()
     }
     public func retry(_ id: UUID, consent: BrowserConsent? = nil, destination: URL? = nil) async throws {
+        if let storageFailure { throw DownloadFailure(.destination, storageFailure + " Restart Harbor after freeing disk space.") }
         guard var job = jobs[id], job.state.canRetry, tasks[id] == nil else { return }
         if let destination { job.destination = destination }
         job.state = .queued; job.error = nil; job.progress = nil; job.status = "Waiting"; job.attempts = 0

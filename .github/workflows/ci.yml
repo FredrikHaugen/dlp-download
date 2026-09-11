@@ -1,0 +1,43 @@
+name: Build and test Harbor
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install project generator
+        run: brew install xcodegen
+      - name: Cache compiled engines
+        uses: actions/cache@v4
+        with:
+          path: Vendor
+          key: engines-${{ runner.arch }}-${{ hashFiles('Scripts/bootstrap_engines.py', 'Scripts/build_portable_media.py', 'dependencies.lock.json') }}
+      - name: Bootstrap pinned engines
+        run: python3 Scripts/bootstrap_engines.py
+      - name: Generate Xcode project
+        run: xcodegen generate
+      - name: Unit and local integration tests
+        run: python3 Scripts/integration_test.py --ui
+      - name: Build Release
+        run: xcodebuild -project Harbor.xcodeproj -scheme Harbor -configuration Release -destination 'platform=macOS' -derivedDataPath build/xcode build
+      - name: Verify the exact bundled engines
+        run: python3 Scripts/integration_test.py build/xcode/Build/Products/Release/Harbor.app/Contents
+      - name: Package development artifact
+        run: python3 Scripts/package_app.py --development
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Harbor-${{ runner.arch }}-development
+          path: artifacts/*.dmg

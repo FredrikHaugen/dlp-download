@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fetch pinned official sources and assemble a relocatable, host-architecture engine set.
 
-Requires Xcode command-line tools, curl, make, and installed ffmpeg/deno.
+Requires Xcode command-line tools, curl, make, and Python 3.12+.
 No system installation is performed. Re-run on Intel to build the Intel engine set.
 """
 import hashlib
@@ -12,6 +12,7 @@ import platform
 import shutil
 import subprocess
 import tarfile
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 VENDOR = ROOT / 'Vendor'
@@ -27,6 +28,10 @@ def fetch(url, name):
     if not target.exists():
         subprocess.run(['curl', '--fail', '--location', '--retry', '3', '--silent', '--show-error', url, '-o', str(target) + '.part'], check=True)
         Path(str(target) + '.part').replace(target)
+    lockfile = ROOT / 'dependencies.lock.json'
+    expected = json.loads(lockfile.read_text()).get(name) if lockfile.exists() else None
+    if expected and hashlib.sha256(target.read_bytes()).hexdigest() != expected:
+        raise SystemExit('Pinned input checksum mismatch: ' + name)
     return target
 
 def bundle(source, destination, seen):
@@ -81,20 +86,39 @@ def main():
             subprocess.run(['./configure', '--with-appletls', '--without-openssl', '--without-gnutls', '--without-libssh2', '--without-libgcrypt', '--without-libnettle', '--without-libxml2', '--without-sqlite3', '--disable-nls'], cwd=build, env=env, stdout=log, stderr=log, check=True)
             subprocess.run(['make', '-j4'], cwd=build, env=env, stdout=log, stderr=log, check=True)
     seen = {}
-    for name, source_path in [('aria2c', aria), ('ffmpeg', shutil.which('ffmpeg')), ('ffprobe', shutil.which('ffprobe')), ('deno', shutil.which('deno'))]:
+    for name, source_path in [('aria2c', aria)]:
         if source_path is None:
             raise SystemExit('Install ' + name + ' before bootstrapping engines.')
         bundle(source_path, ENGINE / 'MacOS' / name, seen)
+    deno_arch = 'aarch64' if platform.machine() == 'arm64' else 'x86_64'
+    deno_name = 'deno-' + deno_arch + '-apple-darwin.zip'
+    deno_release = json.loads(fetch('https://api.github.com/repos/denoland/deno/releases/tags/v2.9.4', 'deno-v2.9.4-release.json').read_text())
+    asset = next(a for a in deno_release['assets'] if a['name'] == deno_name)
+    deno_archive = fetch(asset['browser_download_url'], deno_name)
+    digest = asset.get('digest', '')
+    if digest != 'sha256:' + hashlib.sha256(deno_archive.read_bytes()).hexdigest():
+        raise SystemExit('Deno checksum mismatch or missing upstream digest')
+    with zipfile.ZipFile(deno_archive) as archive:
+        (ENGINE / 'MacOS/deno').write_bytes(archive.read('deno'))
+    (ENGINE / 'MacOS/deno').chmod(0o755)
+    from build_portable_media import main as build_portable_media
+    build_portable_media()
+    recipe_folder = ENGINE / 'Resources/Sources/BuildRecipes'
+    recipe_folder.mkdir(parents=True, exist_ok=True)
+    for filename in ['bootstrap_engines.py', 'build_portable_media.py']:
+        shutil.copy2(ROOT / 'Scripts' / filename, recipe_folder / filename)
+    if (ROOT / 'dependencies.lock.json').exists():
+        shutil.copy2(ROOT / 'dependencies.lock.json', recipe_folder / 'dependencies.lock.json')
     versions = {}
     for name in ['yt-dlp', 'aria2c', 'ffmpeg', 'ffprobe', 'deno']:
         args = ['-version'] if name.startswith('ff') else ['--version']
         versions[name] = run(str(ENGINE / 'MacOS' / name), *args).splitlines()[0]
+    shutil.copy2(build / 'COPYING', ENGINE / 'Resources' / 'aria2-COPYING')
     manifest = {'version': VERSION, 'architecture': platform.machine(), 'components': versions,
-                'files': {str(p.relative_to(ENGINE)): hashlib.sha256(p.read_bytes()).hexdigest() for p in ENGINE.rglob('*') if p.is_file()},
+                'files': {str(p.relative_to(ENGINE)): hashlib.sha256(p.read_bytes()).hexdigest() for p in ENGINE.rglob('*') if p.is_file() and p.name != 'engine-set.json'},
                 'releaseReady': False,
                 'note': 'Local development engine set. Public release requires license/source audit and Developer ID signing.'}
     (ENGINE / 'Resources' / 'engine-set.json').write_text(json.dumps(manifest, indent=2) + '\n')
-    shutil.copy2(build / 'COPYING', ENGINE / 'Resources' / 'aria2-COPYING')
     print(json.dumps(versions, indent=2))
 
 if __name__ == '__main__':

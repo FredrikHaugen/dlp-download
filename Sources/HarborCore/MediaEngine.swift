@@ -31,13 +31,18 @@ public struct MediaEngine: DownloadEngine {
     public static func decodeInspection(_ data: Data, source: URL) throws -> Inspection {
         guard let info = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw DownloadFailure(.engine, "The source returned invalid media information.") }
         let title = info["title"] as? String ?? source.host ?? "Media"
+        guard info["is_live"] as? Bool != true, info["live_status"] as? String != "is_live" else {
+            throw DownloadFailure(.unsupported, "Live-stream recording is not supported yet. Try this link after the stream has finished.")
+        }
         let entries = info["entries"] as? [Any]
         let rawItems = entries ?? [info]
         let items = rawItems.enumerated().compactMap { index, raw -> MediaItem? in
             guard let entry = raw as? [String: Any] else { return nil }
             let id = entry["id"] as? String ?? String(index)
             let title = entry["title"] as? String ?? "Unavailable item"
-            let candidate = (entry["webpage_url"] as? String) ?? (entry["url"] as? String)
+            let webpage = entry["webpage_url"] as? String
+            let sharesParent = entries != nil && webpage == source.absoluteString
+            let candidate = sharesParent ? (entry["url"] as? String) ?? webpage : webpage ?? (entry["url"] as? String)
             let resolved = candidate.flatMap(URL.init(string:))
             let valid = resolved.flatMap { ["http", "https"].contains($0.scheme ?? "") ? $0 : nil }
             let url = entries == nil ? source : valid
@@ -45,7 +50,15 @@ public struct MediaEngine: DownloadEngine {
             let unavailable = title == "[Deleted video]" || title == "[Private video]" || availability == "private" || url == nil
             let thumbnails = entry["thumbnails"] as? [[String: Any]]
             let thumbnail = ((entry["thumbnail"] as? String) ?? (thumbnails?.last?["url"] as? String)).flatMap(URL.init(string:))
-            return MediaItem(id: "\(index):\(id)", url: url ?? source, title: title, duration: entry["duration"] as? Double, thumbnail: thumbnail, available: !unavailable)
+            var presets: [FormatPreset]?
+            if let formats = entry["formats"] as? [[String: Any]], !formats.isEmpty {
+                let video = formats.contains { ($0["vcodec"] as? String ?? "unknown") != "none" }
+                let audio = formats.contains { ($0["acodec"] as? String ?? "unknown") != "none" }
+                presets = [.highest]
+                if video { presets?.append(.mobile) }
+                if audio { presets?.append(contentsOf: [.m4a, .mp3]) }
+            }
+            return MediaItem(id: "\(index):\(id)", url: url ?? source, title: title, duration: entry["duration"] as? Double, thumbnail: thumbnail, available: !unavailable, availablePresets: presets, extractionSource: sharesParent ? source : nil, playlistIndex: sharesParent ? (entry["playlist_index"] as? Int ?? index + 1) : nil)
         }
         guard !items.isEmpty else { throw DownloadFailure(.unsupported, "No downloadable items were found at this link.") }
         return Inspection(kind: .media, title: title, items: items, isPlaylist: entries != nil, truncated: (info["playlist_count"] as? Int ?? items.count) > 1000 || items.count >= 1000)
@@ -64,16 +77,20 @@ public struct MediaEngine: DownloadEngine {
         // Download only here; all merge/conversion work takes the shared conversion slot.
         let selector = switch job.preset {
         case .highest: "bv*+ba/b"
-        case .mobile: "bv*[height<=1080]+ba/b[height<=1080]"
+        case .mobile: "bv*[height<=?1080]+ba/b[height<=?1080]"
         case .m4a, .mp3: "ba/b"
         }
         let paths = OutputPaths()
         var args = try baseArguments(engines: engines, consent: consent)
-        args += ["--no-playlist", "--newline", "--progress", "--progress-delta", "0.3", "--progress-template", "download:HARBOR_PROGRESS %(progress)j", "--print", "before_dl:HARBOR_TITLE %(title)j", "--print", "after_video:HARBOR_FILES %(requested_downloads.:.filepath)j", "--print", "after_move:HARBOR_FILE %(filepath)j", "--no-simulate", "--continue", "--no-overwrites", "--no-mtime", "--restrict-filenames", "--trim-filenames", "150", "--fixup", "never", "--format", selector, "--output", "%(title).120B [%(id)s].%(ext)s", "--paths", job.stagingDirectory.path]
-        // yt-dlp can download separate streams without merging when ffmpeg is unavailable.
-        // --allow-unplayable-formats would change DRM behavior, so use separate format output instead.
+        args += ["--no-playlist", "--match-filter", "!is_live", "--newline", "--progress", "--progress-delta", "0.3", "--progress-template", "download:HARBOR_PROGRESS %(progress)j", "--print", "before_dl:HARBOR_TITLE %(title)j", "--print", "after_move:HARBOR_FILE %(filepath)j", "--no-simulate", "--continue", "--no-overwrites", "--no-mtime", "--restrict-filenames", "--trim-filenames", "150", "--fixup", "never", "--format", selector, "--output", "%(title).120B [%(id)s].%(ext)s", "--paths", job.stagingDirectory.path]
+        // Comma selection downloads streams individually, leaving merging to our gate.
+        // Each selection falls back to combined media for progressive-only sources.
         if job.preset == .highest || job.preset == .mobile {
-            args[args.firstIndex(of: selector)!] = job.preset == .highest ? "bv,ba/b" : "bv[height<=1080],ba/b[height<=1080]"
+            args[args.firstIndex(of: selector)!] = job.preset == .highest ? "bv/b,ba/b" : "bv[height<=?1080]/b[height<=?1080],ba/b[height<=?1080]"
+        }
+        if let index = job.playlistIndex {
+            args.removeAll { $0 == "--no-playlist" }
+            args += ["--yes-playlist", "--playlist-items", String(index)]
         }
         args += ["--", job.source.absoluteString]
         let result = try await runner.run(executable: engines.executable("yt-dlp"), arguments: args) { line in
@@ -119,8 +136,9 @@ public struct MediaEngine: DownloadEngine {
             args += ["-map", "0:v?", "-map", files.count > 1 ? "1:a?" : "0:a?", "-c", "copy"]
         case .mobile:
             guard video != nil else { throw DownloadFailure(.unsupported, "This source has no video for the Mobile preset. Choose Audio instead.") }
-            args += ["-map", "0:v:0", "-map", files.count > 1 ? "1:a:0" : "0:a:0?", "-c:v", video?["codec_name"] as? String == "h264" ? "copy" : "h264_videotoolbox"]
-            if video?["codec_name"] as? String != "h264" { args += ["-b:v", "5M", "-pix_fmt", "yuv420p"] }
+            let copyVideo = video?["codec_name"] as? String == "h264" && (video?["height"] as? Int ?? Int.max) <= 1080 && (video?["width"] as? Int ?? Int.max) <= 1920
+            args += ["-map", "0:v:0", "-map", files.count > 1 ? "1:a:0" : "0:a:0?", "-c:v", copyVideo ? "copy" : "h264_videotoolbox"]
+            if !copyVideo { args += ["-vf", "scale=w='min(1920,iw)':h='min(1080,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2", "-b:v", "5M", "-pix_fmt", "yuv420p"] }
             args += ["-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart"]
         case .m4a:
             args += ["-vn", "-c:a", audio?["codec_name"] as? String == "aac" ? "copy" : "aac", "-b:a", "192k", "-movflags", "+faststart"]

@@ -35,8 +35,12 @@ public struct MediaItem: Identifiable, Codable, Hashable, Sendable {
     public var duration: Double?
     public var thumbnail: URL?
     public var available: Bool
-    public init(id: String, url: URL, title: String, duration: Double? = nil, thumbnail: URL? = nil, available: Bool = true) {
-        self.id = id; self.url = url; self.title = title; self.duration = duration; self.thumbnail = thumbnail; self.available = available
+    public var availablePresets: [FormatPreset]?
+    public var extractionSource: URL?
+    public var playlistIndex: Int?
+    public init(id: String, url: URL, title: String, duration: Double? = nil, thumbnail: URL? = nil, available: Bool = true, availablePresets: [FormatPreset]? = nil, extractionSource: URL? = nil, playlistIndex: Int? = nil) {
+        self.id = id; self.url = url; self.title = title; self.duration = duration; self.thumbnail = thumbnail; self.available = available; self.availablePresets = availablePresets
+        self.extractionSource = extractionSource; self.playlistIndex = playlistIndex
     }
 }
 public struct Inspection: Sendable {
@@ -58,6 +62,7 @@ public struct DownloadJob: Identifiable, Codable, Sendable {
     public var destination: URL
     public var groupID: UUID?
     public var groupTitle: String?
+    public var playlistIndex: Int?
     public var state: DownloadState = .queued
     public var createdAt: Date = .now
     public var updatedAt: Date = .now

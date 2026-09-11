@@ -55,7 +55,13 @@ public enum FileSafety {
     public static func filename(_ value: String) -> String {
         let sanitized = value.components(separatedBy: CharacterSet(charactersIn: "/\\:\0").union(.controlCharacters)).joined(separator: "_")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return sanitized.isEmpty || sanitized == "." || sanitized == ".." ? "Download" : String(sanitized.prefix(180))
+        guard !sanitized.isEmpty, sanitized != ".", sanitized != "..", sanitized != ".validator.json" else { return "Download" }
+        var result = ""
+        for character in sanitized {
+            if result.utf8.count + String(character).utf8.count > 180 { break }
+            result.append(character)
+        }
+        return result.isEmpty ? "Download" : result
     }
     public static func prepare(_ job: DownloadJob) throws {
         var isDirectory: ObjCBool = false

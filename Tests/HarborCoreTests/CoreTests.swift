@@ -15,6 +15,12 @@ import Testing
     #expect(FileSafety.filename("../../bad/name") == ".._.._bad_name")
     #expect(FileSafety.filename("..") == "Download")
     #expect(!FileSafety.filename("a\0b").contains("\0"))
+    #expect(FileSafety.filename(String(repeating: "🌎", count: 200)).utf8.count <= 180)
+}
+@Test func audioOnlyMetadataDisablesVideoPreset() throws {
+    let data = Data(#"{"title":"Audio","formats":[{"vcodec":"none","acodec":"opus"}]}"#.utf8)
+    let result = try MediaEngine.decodeInspection(data, source: URL(string: "https://example.com/audio")!)
+    #expect(result.items.first?.availablePresets == [.highest, .m4a, .mp3])
 }
 @Test func progressHandlesMissingAndEstimatedTotals() throws {
     let event = try #require(MediaEngine.progressEvent("HARBOR_PROGRESS {\"downloaded_bytes\":50,\"total_bytes_estimate\":100,\"speed\":20}"))
